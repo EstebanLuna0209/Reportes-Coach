@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Reportes Coach</title>
+  <meta name="description" content="Registro de clientes, mediciones de báscula y reportes PDF de avance.">
+  <meta name="theme-color" content="#1f3a5f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Reportes Coach">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="#/" class="brand" id="brand">Reportes Coach</a>
+    <nav>
+      <a href="#/" data-nav="clients">Clientes</a>
+      <a href="#/plantillas" data-nav="templates">Plantillas</a>
+      <a href="#/ajustes" data-nav="settings">Ajustes</a>
+    </nav>
+  </header>
+  <main id="app" class="container"></main>
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/jspdf.umd.min.js"></script>
+  <script src="vendor/jspdf.plugin.autotable.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
