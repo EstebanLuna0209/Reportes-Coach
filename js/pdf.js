@@ -1,8 +1,9 @@
 // Generación del PDF estilo "hoja de resultados InBody".
 import {
-  METRICS, DERIVED, GOALS, withDerived, num, fmt, deltaQuality, rangeFor, classify,
+  METRICS, DERIVED, EXTRA, TAPE, GOALS, withDerived, num, fmt, deltaQuality, rangeFor, classify,
   clientAge, fmtDate,
 } from './metrics.js';
+import { analyzeDiet, splitItems, fmtMacros } from './nutrition.js';
 
 const PAGE_W = 210, PAGE_H = 297, M = 12; // mm
 const CW = PAGE_W - 2 * M;
@@ -42,6 +43,7 @@ export async function buildReportPDF({ settings, client, measurements, currentId
   const cur = ms[curIdx];
   const prev = curIdx > 0 ? ms[curIdx - 1] : null;
   const first = curIdx > 0 ? ms[0] : null;
+  const prevM = prev, firstM = first;
   const upto = ms.slice(0, curIdx + 1);
 
   let y = 0;
@@ -128,20 +130,13 @@ export async function buildReportPDF({ settings, client, measurements, currentId
     else doc.triangle(x, yy, x + 1.8, yy, x + 0.9, yy + 1.6, 'F');
   }
 
-  let currentSubtitle = 'REPORTE DE COMPOSICIÓN CORPORAL';
-
-  // ======================= PÁGINA 1: RESULTADOS =======================
-  header(currentSubtitle);
-  clientBox();
-
-  if (cur) {
-    // ---- 1. Composición corporal ----
-    sectionTitle('Análisis de composición corporal',
-      prev ? `Comparado con ${fmtDate(prev.date)}${first && first !== prev ? ' y con tu inicio ' + fmtDate(first.date) : ''}` : 'Primera medición');
-
+  // Tabla comparativa: actual / anterior / cambio / inicio / cambio total
+  function compareTable(defs, extraRows = [], base = {}) {
+    const prev = base.prev !== undefined ? base.prev : prevM;
+    const first = base.first !== undefined ? base.first : firstM;
     const rows = [];
     const meta = [];
-    for (const def of [...METRICS, ...DERIVED]) {
+    for (const def of defs) {
       if (!num(cur[def.key])) continue;
       const unit = def.unit && def.unit !== 'nivel' ? ` ${def.unit}` : '';
       const r = [def.label, fmt(cur[def.key], def.dec) + unit];
@@ -152,6 +147,17 @@ export async function buildReportPDF({ settings, client, measurements, currentId
       rows.push(r);
       meta.push({ def, dPrev, dFirst, derived: DERIVED.includes(def) });
     }
+    for (const def of extraRows) {
+      if (!num(cur[def.key])) continue;
+      const r = [def.label, fmt(cur[def.key], def.dec)];
+      const dPrev = prev && num(prev[def.key]) ? cur[def.key] - prev[def.key] : null;
+      const dFirst = first && num(first[def.key]) ? cur[def.key] - first[def.key] : null;
+      if (prev) r.push(num(prev[def.key]) ? fmt(prev[def.key], def.dec) : '—', deltaStr(dPrev, def.dec));
+      if (first && first !== prev) r.push(num(first[def.key]) ? fmt(first[def.key], def.dec) : '—', deltaStr(dFirst, def.dec));
+      rows.push(r);
+      meta.push({ def, dPrev, dFirst, derived: true });
+    }
+    if (!rows.length) return false;
     const head = ['Indicador', 'Actual'];
     if (prev) head.push(`Anterior\n${fmtDate(prev.date)}`, 'Cambio');
     if (first && first !== prev) head.push(`Inicio\n${fmtDate(first.date)}`, 'Cambio total');
@@ -196,7 +202,23 @@ export async function buildReportPDF({ settings, client, measurements, currentId
       },
       willDrawPage: d => { if (d.pageNumber > 1) header(currentSubtitle); },
     });
-    y = doc.lastAutoTable.finalY + 7;
+    y = doc.lastAutoTable.finalY + 6;
+    return true;
+  }
+
+  let currentSubtitle = 'REPORTE DE COMPOSICIÓN CORPORAL';
+
+  // ======================= PÁGINA 1: RESULTADOS =======================
+  header(currentSubtitle);
+  clientBox();
+
+  if (cur) {
+    // ---- 1. Composición corporal ----
+    sectionTitle('Análisis de composición corporal',
+      prev ? `Comparado con ${fmtDate(prev.date)}${first && first !== prev ? ' y con tu inicio ' + fmtDate(first.date) : ''}` : 'Primera medición');
+
+    compareTable([...METRICS, ...EXTRA, ...DERIVED.filter(d => !(d.key === 'fatKg' && num(cur.fatMassKg)))]);
+    y += 1;
 
     // ---- 2. Análisis músculo-grasa (barras con rangos) ----
     const bars = ['weight', 'musclePct', 'fatPct', 'bmi', 'visceral', 'metabolicAge']
@@ -304,6 +326,17 @@ export async function buildReportPDF({ settings, client, measurements, currentId
       }
     }
 
+    // ---- 4b. Medidas con cinta ----
+    if (TAPE.some(d => num(cur[d.key]))) {
+      ensure(30);
+      sectionTitle('Medidas corporales (cm)');
+      const hasTape = m => TAPE.some(d => num(m[d.key]));
+      const earlier = upto.slice(0, -1).filter(hasTape);
+      const tPrev = earlier.length ? earlier[earlier.length - 1] : null;
+      const tFirst = earlier.length > 1 ? earlier[0] : null;
+      compareTable(TAPE, [{ key: 'whr', label: 'Índice cintura / cadera', dec: 2, better: 'down' }], { prev: tPrev, first: tFirst });
+    }
+
     // ---- 5. Historial ----
     if (options.includeHistory !== false && upto.length >= 2) {
       const hist = upto.slice(-12).reverse();
@@ -346,18 +379,38 @@ export async function buildReportPDF({ settings, client, measurements, currentId
     }
     const meals = (diet.meals || []).filter(m => m.title || m.items);
     if (meals.length) {
-      sectionTitle('Comidas del día');
+      const showMacros = options.includeMacros !== false;
+      const an = showMacros ? analyzeDiet({ meals }, options.foods, diet.cookedMode || 'crudo') : null;
+      sectionTitle('Comidas del día', showMacros ? 'Calorías y macros aproximados' : '');
+      const mac = t => `${Math.round(t.kcal)} kcal\nP ${Math.round(t.p)} g\nC ${Math.round(t.c)} g\nG ${Math.round(t.f)} g`;
+      const body = meals.map((m, i) => {
+        const r = [m.title || '', splitItems(m.items).map(s => '•  ' + s).join('\n')];
+        if (showMacros) r.push(an.meals[i].total.kcal > 0 ? mac(an.meals[i].total) : '—');
+        return r;
+      });
       doc.autoTable({
         startY: y,
-        body: meals.map(m => [m.title || '', splitItems(m.items).map(s => '•  ' + s).join('\n')]),
+        head: showMacros ? [['Comida', 'Alimentos', 'Aprox.']] : undefined,
+        body,
+        foot: showMacros && an.total.kcal > 0 ? [['Total del día', { content: fmtMacros(an.total, '   ·   '), colSpan: 2, styles: { halign: 'left' } }]] : undefined,
         margin: { left: M, right: M, top: 30, bottom: 16 },
         theme: 'grid',
         styles: { font: 'helvetica', fontSize: 9.5, cellPadding: 3, lineColor: C.line, lineWidth: 0.2, textColor: C.text, valign: 'middle' },
-        columnStyles: { 0: { cellWidth: 45, fontStyle: 'bold', fillColor: accentSoft, textColor: accent } },
-        didParseCell: d => { d.cell.text = d.cell.text.map(pdfTxt); },
+        headStyles: { fillColor: accentSoft, textColor: accent, fontStyle: 'bold', fontSize: 8 },
+        footStyles: { fillColor: accent, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 9.5 },
+        columnStyles: { 0: { cellWidth: 42, fontStyle: 'bold', fillColor: accentSoft, textColor: accent }, 2: { cellWidth: 26, fontSize: 8, halign: 'center', textColor: C.text } },
+        didParseCell: d => {
+          d.cell.text = d.cell.text.map(pdfTxt);
+          if (d.section === 'body' && d.column.index === 2) { d.cell.styles.fontStyle = 'normal'; }
+        },
         willDrawPage: d => { if (d.pageNumber > 1) header(currentSubtitle); },
       });
-      y = doc.lastAutoTable.finalY + 6;
+      y = doc.lastAutoTable.finalY + 3;
+      if (showMacros) {
+        font('italic', 6.8); setText(C.muted);
+        doc.text(pdfTxt(`Valores aproximados. Carnes, arroz y pasta calculados en peso ${diet.cookedMode === 'cocido' ? 'cocido' : 'crudo'}. P = proteína, C = carbohidratos, G = grasa.`), M, y + 1.5);
+        y += 6;
+      } else y += 3;
     }
     notesBox('Indicaciones', diet.notes);
   }
@@ -429,16 +482,6 @@ export async function buildReportPDF({ settings, client, measurements, currentId
   }
 }
 
-// Separa alimentos por línea, coma, o cuando inicia una nueva cantidad ("2 huevos 200g claras").
-const QTY_SPLIT = /(?<=[a-záéíóúñ)])\s+(?=\d+(?:[.,]\d+)?\s*(?:g|gr|grs|gramos|ml|kg|oz|tomas?|scoops?|piezas?|pzas?|tazas?|cdas?|cucharadas?|rebanadas?)\b)/i;
-function splitItems(text) {
-  return String(text || '')
-    .split(/\n|,(?![^(]*\))/)
-    .flatMap(s => s.split(QTY_SPLIT))
-    .map(s => s.trim())
-    .filter(Boolean);
-}
-
 function buildSummary(base, cur, goal) {
   if (!base || !cur) return [];
   const out = [];
@@ -457,6 +500,8 @@ function buildSummary(base, cur, goal) {
   const dfp = d('fatPct'), dmp = d('musclePct');
   if (num(dfp) && Math.abs(dfp) >= 0.05) out.push(`Tu porcentaje de grasa ${dfp < 0 ? 'bajó' : 'subió'} ${fmt(Math.abs(dfp), 1)} puntos (de ${fmt(base.fatPct)}% a ${fmt(cur.fatPct)}%).`);
   if (num(dmp) && Math.abs(dmp) >= 0.05) out.push(`Tu porcentaje de músculo ${dmp > 0 ? 'subió' : 'bajó'} ${fmt(Math.abs(dmp), 1)} puntos (de ${fmt(base.musclePct)}% a ${fmt(cur.musclePct)}%).`);
+  const dw2 = d('waist');
+  if (num(dw2) && Math.abs(dw2) >= 0.1) out.push(`Tu cintura ${dw2 < 0 ? 'bajó' : 'subió'} ${fmt(Math.abs(dw2), 1)} cm (de ${fmt(base.waist)} a ${fmt(cur.waist)} cm).`);
   const dv = d('visceral');
   if (num(dv) && dv !== 0) out.push(`Tu grasa visceral ${dv < 0 ? 'bajó' : 'subió'} de nivel ${fmt(base.visceral, 0)} a ${fmt(cur.visceral, 0)}.`);
   const da = d('metabolicAge');

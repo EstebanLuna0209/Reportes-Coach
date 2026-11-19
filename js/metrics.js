@@ -11,6 +11,28 @@ export const METRICS = [
   { key: 'visceral', label: 'Grasa visceral', short: 'G. visceral', unit: 'nivel', dec: 0, better: 'down' },
 ];
 
+// Datos adicionales que reportan básculas InBody (opcionales)
+export const EXTRA = [
+  { key: 'smmKg', label: 'Masa músculo esquelético', short: 'Músculo esq.', unit: 'kg', dec: 1, better: 'up' },
+  { key: 'fatMassKg', label: 'Masa grasa (báscula)', short: 'Masa grasa', unit: 'kg', dec: 1, better: 'down' },
+  { key: 'water', label: 'Agua corporal total', short: 'Agua', unit: 'L', dec: 1, better: 'up' },
+  { key: 'protein', label: 'Proteína', unit: 'kg', dec: 1, better: 'up' },
+  { key: 'minerals', label: 'Minerales', unit: 'kg', dec: 2, better: 'up' },
+  { key: 'inbodyScore', label: 'Puntuación InBody', short: 'Puntuación', unit: 'pts', dec: 0, better: 'up' },
+];
+
+// Medidas con cinta (opcionales)
+export const TAPE = [
+  { key: 'neck', label: 'Cuello', unit: 'cm', dec: 1, better: 'none' },
+  { key: 'chest', label: 'Pecho', unit: 'cm', dec: 1, better: 'none' },
+  { key: 'arm', label: 'Brazo', unit: 'cm', dec: 1, better: 'none' },
+  { key: 'waist', label: 'Cintura', unit: 'cm', dec: 1, better: 'down' },
+  { key: 'abdomen', label: 'Abdomen', unit: 'cm', dec: 1, better: 'down' },
+  { key: 'hip', label: 'Cadera', unit: 'cm', dec: 1, better: 'down' },
+  { key: 'thigh', label: 'Muslo', unit: 'cm', dec: 1, better: 'none' },
+  { key: 'calf', label: 'Pantorrilla', unit: 'cm', dec: 1, better: 'none' },
+];
+
 export const DERIVED = [
   { key: 'fatKg', label: 'Masa grasa', unit: 'kg', dec: 1, better: 'down' },
   { key: 'muscleKg', label: 'Masa muscular', unit: 'kg', dec: 1, better: 'up' },
@@ -26,10 +48,11 @@ export const GOALS = {
 
 export function withDerived(m) {
   const out = { ...m };
-  if (num(m.weight) && num(m.fatPct)) {
-    out.fatKg = m.weight * m.fatPct / 100;
-    out.leanKg = m.weight - out.fatKg;
-  }
+  if (num(m.fatMassKg)) out.fatKg = m.fatMassKg;
+  else if (num(m.weight) && num(m.fatPct)) out.fatKg = m.weight * m.fatPct / 100;
+  if (num(m.weight) && num(out.fatKg)) out.leanKg = m.weight - out.fatKg;
+  if (num(m.weight) && !num(m.fatPct) && num(m.fatMassKg)) out.fatPct = m.fatMassKg / m.weight * 100;
+  if (num(m.waist) && num(m.hip)) out.whr = m.waist / m.hip;
   if (num(m.weight) && num(m.musclePct)) out.muscleKg = m.weight * m.musclePct / 100;
   return out;
 }
@@ -52,6 +75,7 @@ export function fmtDelta(v, dec = 1) {
 export function deltaQuality(metric, delta, goal = 'bajar') {
   if (!num(delta) || Math.abs(delta) < 1e-9) return 'neutral';
   let dir = metric.better;
+  if (dir === 'none') return 'neutral';
   if (dir === 'goal') {
     if (goal === 'subir') dir = 'up';
     else if (goal === 'bajar') dir = 'down';
@@ -137,20 +161,29 @@ export function parseScaleText(text) {
   const out = {};
   const rules = [
     ['visceral', /grasa\s*visceral|visceral/i],
-    ['metabolicAge', /edad\s*metab/i],
-    ['fatPct', /grasa/i],
+    ['metabolicAge', /edad\s*(metab|corporal)|body\s*age/i],
+    ['smmKg', /esquel[eé]tic|\bsmm\b/i],
+    ['fatMassKg', /masa\s*(de\s*)?grasa|grasa\s*corporal\s*\(?kg|body\s*fat\s*mass/i],
+    ['fatPct', /grasa|\bpbf\b/i],
     ['musclePct', /m[uú]sculo|muscular/i],
     ['bmi', /\bbmi\b|\bimc\b/i],
     ['rm', /\brm\b|metabolismo|basal|\bbmr\b|\btmb\b/i],
+    ['water', /agua|\btbw\b/i],
+    ['protein', /prote[ií]na/i],
+    ['minerals', /mineral/i],
+    ['inbodyScore', /puntuaci[oó]n|score|puntaje/i],
+    ['neck', /cuello/i], ['chest', /pecho|t[oó]rax/i], ['arm', /brazo|b[ií]ceps/i], ['waist', /cintura/i],
+    ['abdomen', /abdomen|ombligo/i], ['hip', /cadera|gl[uú]teo/i], ['thigh', /muslo|pierna/i], ['calf', /pantorrilla/i],
     ['weight', /peso|weight/i],
   ];
   for (const raw of text.split(/\n|;/)) {
     const line = raw.trim();
     if (!line) continue;
-    const nm = line.match(/(-?\d+(?:[.,]\d+)?)\s*(?:kg|kcal|%|años)?\s*$/i);
+    const nm = line.match(/(-?\d+(?:[.,]\d+)?)\s*(?:kg|kcal|%|años|cm|l|pts|puntos)?\s*$/i);
     if (!nm) continue;
     const label = line.slice(0, nm.index);
-    const rule = rules.find(([, re]) => re.test(label));
+    const isPct = /%|porcentaje/i.test(line);
+    const rule = rules.find(([k, re]) => re.test(label) && !(isPct && (k === 'smmKg' || k === 'fatMassKg')));
     if (rule && out[rule[0]] === undefined) out[rule[0]] = parseFloat(nm[1].replace(',', '.'));
   }
   return out;

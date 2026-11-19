@@ -1,7 +1,7 @@
 // Service worker: permite usar la app sin internet una vez abierta.
-const CACHE = 'reportes-coach-v1';
+const CACHE = 'reportes-coach-v3';
 const ASSETS = [
-  './', 'index.html', 'css/styles.css', 'js/app.js', 'js/db.js', 'js/metrics.js', 'js/pdf.js',
+  './', 'index.html', 'css/styles.css', 'js/app.js', 'js/db.js', 'js/metrics.js', 'js/pdf.js', 'js/nutrition.js', 'js/firebase-config.js', 'vendor/firebase.js',
   'vendor/jspdf.umd.min.js', 'vendor/jspdf.plugin.autotable.min.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
@@ -13,7 +13,7 @@ self.addEventListener('activate', e => {
 });
 // Red primero (para recibir actualizaciones), caché si no hay conexión.
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
+  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
     fetch(e.request).then(res => {
       const copy = res.clone();

@@ -4,6 +4,8 @@ App web (funciona en celular y computadora, también sin internet) para que el c
 
 - Registre **clientes** (sexo, edad, estatura, objetivo, notas).
 - Capture las **mediciones de la báscula**: peso, IMC, % grasa, % músculo, RM (metabolismo en reposo), edad metabólica y grasa visceral. Se puede **pegar el texto** tal cual (`Peso:93.2`, `BMI:30.4`…) y se llenan los campos solos.
+- Capture opcionalmente **medidas con cinta** (cuello, pecho, brazo, cintura, abdomen, cadera, muslo, pantorrilla) y **datos extra de InBody** (músculo esquelético, masa grasa, agua, proteína, minerales, puntuación).
+- Vea las **calorías y macros aproximados** de cada comida y del día (base de ~65 alimentos comunes en México + alimentos propios del coach en *Plantillas → Mis alimentos*).
 - Arme la **dieta** y la **rutina** de cada cliente (o pegue el texto de WhatsApp) y guarde **plantillas** para reutilizarlas.
 - Genere y **comparta por WhatsApp** un **PDF estilo InBody** con:
   - Tabla de composición corporal (actual vs anterior vs inicio, con flechas de mejora).
@@ -22,13 +24,19 @@ Para probar en local: `python3 -m http.server` y abrir `http://localhost:8000`.
 
 ## Datos
 
-Los datos se guardan **solo en el dispositivo** (IndexedDB del navegador). En **Ajustes → Respaldo** se descarga un archivo `.json` que sirve para respaldar o pasar todo a otro dispositivo. Conviene respaldar seguido.
+- **Con Firebase (recomendado):** el coach entra con correo y contraseña y ve los mismos datos en celular, tablet y computadora, con sincronización en vivo y funcionamiento sin internet. Configuración paso a paso en [LEEME-FIREBASE.md](LEEME-FIREBASE.md).
+- **Sin Firebase:** mientras `js/firebase-config.js` tenga `null`, la app guarda todo solo en el dispositivo (IndexedDB).
+
+En ambos casos, **Ajustes → Respaldo** descarga una copia `.json` de todos los datos.
 
 ## Estructura
 
 - `index.html`, `css/styles.css`
 - `js/app.js` – pantallas e interacción
-- `js/db.js` – almacenamiento local y respaldo
+- `js/db.js` – almacenamiento (local o Firestore) y respaldo
+- `js/firebase-config.js` – configuración de Firebase
+- `firestore.rules`, `firebase.json` – reglas de seguridad y publicación en Firebase Hosting
 - `js/metrics.js` – métricas, rangos de referencia e interpretación de texto
-- `js/pdf.js` – generación del PDF (jsPDF + AutoTable en `vendor/`)
+- `js/nutrition.js` – base de alimentos y cálculo de calorías/macros
+- `js/pdf.js` – generación del PDF (jsPDF + AutoTable en `vendor/`; `vendor/firebase.js` es el SDK de Firebase 10.14.1 empaquetado)
 - `sw.js`, `manifest.webmanifest` – instalación y uso sin conexión
