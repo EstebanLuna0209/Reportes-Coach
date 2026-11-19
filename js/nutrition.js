@@ -173,7 +173,7 @@ export function parseFoodItem(text, foods = BUILTIN_FOODS, cookedMode = 'crudo')
   if (food.cooked && (forceCooked || (cookedMode === 'cocido' && !forceRaw))) v = food.cooked;
   const k = grams / 100;
   return {
-    text: raw, food, grams,
+    text: raw, food, grams, mode: food.cooked ? (v === food.cooked ? 'cocido' : 'crudo') : null,
     kcal: v.kcal * k, p: v.p * k, c: v.c * k, f: v.f * k,
   };
 }
@@ -204,3 +204,9 @@ export function analyzeDiet(diet, foods, cookedMode) {
 
 export const fmtMacros = (t, sep = ' · ') =>
   `${Math.round(t.kcal).toLocaleString('es-MX')} kcal${sep}P ${Math.round(t.p)} g${sep}C ${Math.round(t.c)} g${sep}G ${Math.round(t.f)} g`;
+
+// Cambia o agrega "(crudo)" / "(cocido)" en el texto de un alimento.
+export function setCookWord(text, mode) {
+  const base = text.replace(/\s*\(?\b(?:crud|cocid)[oa]s?\b\)?/gi, '').trim();
+  return `${base} (${mode})`;
+}

@@ -1,10 +1,10 @@
-import { db, uid } from './db.js';
+import { db, uid, cloud, useCloud, localBackend } from './db.js';
 import {
   METRICS, DERIVED, EXTRA, TAPE, GOALS, withDerived, num, fmt, fmtDelta, deltaQuality, clientAge,
   parseScaleText, parseBlocks, parseExercise, todayISO, fmtDate, rangeFor, classify,
 } from './metrics.js';
 import { buildReportPDF } from './pdf.js';
-import { buildFoodDB, BUILTIN_FOODS, analyzeMeal, analyzeDiet, fmtMacros } from './nutrition.js';
+import { buildFoodDB, BUILTIN_FOODS, analyzeMeal, analyzeDiet, fmtMacros, setCookWord } from './nutrition.js';
 
 const app = document.getElementById('app');
 const modalRoot = document.getElementById('modal-root');
@@ -378,7 +378,7 @@ function tabDiet(el, client, plan) {
       box.innerHTML = `${a.total.kcal > 0 ? `<b>≈ ${esc(fmtMacros(a.total))}</b>` : ''}
         <details class="small"><summary>Ver detalle</summary>
           <table class="mini">${a.items.map(it => it.food
-            ? `<tr><td>${esc(it.text)}</td><td class="muted">${esc(it.food.name)} · ${Math.round(it.grams)} g</td><td>${Math.round(it.kcal)} kcal</td></tr>`
+            ? `<tr><td>${esc(it.text)}</td><td class="muted">${esc(it.food.name)} · ${Math.round(it.grams)} g${it.mode ? `<div class="seg">${['crudo', 'cocido'].map(md => `<button type="button" class="${it.mode === md ? 'on' : ''}" data-cook="${i}" data-item="${esc(it.text)}" data-mode="${md}">${md === 'crudo' ? 'Crudo' : 'Cocido'}</button>`).join('')}</div>` : ''}</td><td>${Math.round(it.kcal)} kcal</td></tr>`
             : `<tr class="unk"><td>${esc(it.text)}</td><td colspan="2">No reconocido · <a href="#" data-addfood="${esc(it.text)}">agregar alimento</a></td></tr>`).join('')}</table>
         </details>
         ${a.unknown.length ? `<div class="unk small">⚠ No reconocido: ${a.unknown.map(u => `<a href="#" data-addfood="${esc(u)}">${esc(u)}</a>`).join(', ')}</div>` : ''}`;
@@ -386,6 +386,16 @@ function tabDiet(el, client, plan) {
     const tot = analyzeDiet(diet, foods, mode).total;
     $('#day-total', el).innerHTML = any ? `<span class="muted small">Total del día (aprox.)</span><div><b>${esc(fmtMacros(tot))}</b></div>` : '';
     $$('[data-addfood]', el).forEach(a => a.onclick = e => { e.preventDefault(); foodForm(null, a.dataset.addfood, () => updateMacros()); });
+    $$('[data-cook]', el).forEach(b => b.onclick = () => {
+      const i = +b.dataset.cook, meal = diet.meals[i];
+      const pos = meal.items.indexOf(b.dataset.item);
+      if (pos < 0) return;
+      meal.items = meal.items.slice(0, pos) + setCookWord(b.dataset.item, b.dataset.mode) + meal.items.slice(pos + b.dataset.item.length);
+      const ta = $(`textarea[data-m="${i}"]`, el);
+      if (ta) ta.value = meal.items;
+      save(); updateMacros();
+      const det = $(`[data-macro="${i}"] details`, el); if (det) det.open = true;
+    });
   };
 
   const render = () => {
@@ -403,10 +413,11 @@ function tabDiet(el, client, plan) {
         <div class="grid two" style="margin-bottom:12px">
           <div><label>Título (opcional)</label><input data-f="title" value="${esc(diet.title)}" placeholder="Ej. Plan definición semana 1"></div>
           <div><label>Nota de calorías / macros (opcional)</label><input data-f="kcal" value="${esc(diet.kcal)}" placeholder="Ej. Objetivo: 2,100 kcal"></div>
-          <div><label>Carnes, arroz y pasta pesados en</label><select id="cooked">
+          <div><label>Carnes, arroz y pasta: peso por defecto</label><select id="cooked">
             <option value="crudo" ${diet.cookedMode !== 'cocido' ? 'selected' : ''}>Crudo</option>
             <option value="cocido" ${diet.cookedMode === 'cocido' ? 'selected' : ''}>Cocido</option></select></div>
         </div>
+        <p class="small muted" style="margin:-4px 0 10px">Si algún alimento se pesa diferente, cámbialo en "Ver detalle" con el botón Crudo / Cocido, o escribe "(cocido)" o "(crudo)" junto al alimento. Así también le aparece al cliente en su PDF.</p>
         <div class="macro-total" id="day-total"></div>
         <div id="meals">
           ${diet.meals.map((m, i) => `<div class="block">
@@ -765,9 +776,19 @@ async function viewSettings() {
           <input type="color" id="custom-color" value="${settings.color}" style="width:44px;padding:2px;min-height:34px" title="Otro color"></div></div>
     </div>
 
+    ${cloud.enabled ? `<div class="card stack">
+      <h2>Cuenta</h2>
+      <p class="small" style="margin:0">Sesión iniciada como <b>${esc(cloud.user?.email || '')}</b>. Tus datos se guardan en la nube y se sincronizan en todos los dispositivos donde entres con esta cuenta. También funciona sin internet: los cambios se suben al reconectar.</p>
+      <div class="row"><button class="btn" id="logout">Cerrar sesión</button></div>
+    </div>` : `<div class="card stack">
+      <h2>Modo local</h2>
+      <p class="small muted" style="margin:0">Los datos están solo en este dispositivo. Para sincronizar entre celular, tablet y computadora hay que configurar Firebase (instrucciones en el archivo LEEME-FIREBASE.md del proyecto).</p>
+    </div>`}
     <div class="card stack">
       <h2>Respaldo de datos</h2>
-      <p class="small muted" style="margin:0">Los datos se guardan <b>solo en este dispositivo/navegador</b>. Descarga un respaldo seguido (por ejemplo cada semana) y guárdalo en Drive, iCloud o envíatelo por correo. Con el respaldo puedes pasar todo a otro celular o computadora.</p>
+      <p class="small muted" style="margin:0">${cloud.enabled
+        ? 'Tus datos ya están en la nube. Aun así puedes descargar una copia de seguridad de vez en cuando (por ejemplo cada mes).'
+        : 'Los datos se guardan <b>solo en este dispositivo/navegador</b>. Descarga un respaldo seguido (por ejemplo cada semana) y guárdalo en Drive, iCloud o envíatelo por correo. Con el respaldo puedes pasar todo a otro celular o computadora.'}</p>
       <p class="small" style="margin:0">Último respaldo: <b>${lastBackup ? new Date(lastBackup).toLocaleString('es-MX') : 'nunca'}</b></p>
       <div class="row">
         <button class="btn primary" id="export">Descargar respaldo</button>
@@ -778,6 +799,8 @@ async function viewSettings() {
   const saveSettings = debounce(async () => { await db.setSetting('settings', settings); applyTheme(); }, 300);
   $$('[data-s]').forEach(i => i.oninput = () => { settings[i.dataset.s] = i.value; saveSettings(); });
   $('#scale').onchange = e => { settings.scale = e.target.value; saveSettings(); };
+  const lo = $('#logout');
+  if (lo) lo.onclick = async () => { if (await confirmDialog('Se cerrará la sesión en este dispositivo. Tus datos siguen en la nube.', 'Cerrar sesión')) await cloud.signOut(); };
   $$('[data-color]').forEach(b => b.onclick = async () => { settings.color = b.dataset.color; await saveSettings.flush(); viewSettings(); });
   $('#custom-color').onchange = async e => { settings.color = e.target.value; await saveSettings.flush(); viewSettings(); };
   $('#logo').onchange = async e => {
@@ -806,6 +829,7 @@ async function viewSettings() {
       const data = JSON.parse(await f.text());
       const n = (data.clients || []).length;
       if (await confirmDialog(`El respaldo tiene ${n} clientes. Se combinará con los datos actuales (los registros iguales se reemplazan).`, 'Restaurar')) {
+        data.settings = (data.settings || []).filter(x => x.key !== 'migratedTo');
         await db.importAll(data);
         await loadFoods();
         settings = { ...DEFAULT_SETTINGS, ...(await db.getSetting('settings', {})) };
@@ -832,14 +856,129 @@ function resizeImage(file, max) {
   });
 }
 
-// ================= inicio =================
-(async function init() {
+// ================= SESIÓN (nube) =================
+const AUTH_ERRORS = {
+  'auth/invalid-credential': 'Correo o contraseña incorrectos.',
+  'auth/wrong-password': 'Correo o contraseña incorrectos.',
+  'auth/user-not-found': 'No existe una cuenta con ese correo.',
+  'auth/email-already-in-use': 'Ya existe una cuenta con ese correo. Usa "Entrar".',
+  'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres.',
+  'auth/invalid-email': 'El correo no es válido.',
+  'auth/missing-password': 'Escribe tu contraseña.',
+  'auth/network-request-failed': 'Sin conexión a internet. Intenta de nuevo.',
+  'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos.',
+};
+const authMsg = e => AUTH_ERRORS[e.code] || e.message;
+
+function viewLogin() {
+  document.body.classList.add('logged-out');
+  app.innerHTML = `
+    <div class="card login stack">
+      <h1>Reportes Coach</h1>
+      <p class="muted small" style="margin:0">Entra con tu cuenta para ver tus clientes en cualquier dispositivo.</p>
+      <form id="lf" class="stack">
+        <div><label>Correo</label><input name="email" type="email" autocomplete="username" required></div>
+        <div><label>Contraseña</label><input name="pass" type="password" autocomplete="current-password" minlength="6" required></div>
+        <p id="lerr" class="small bad" style="margin:0"></p>
+        <button class="btn primary" style="width:100%;justify-content:center">Entrar</button>
+      </form>
+      <div class="row between small">
+        <a href="#" id="signup">Crear cuenta (primera vez)</a>
+        <a href="#" id="reset">Olvidé mi contraseña</a>
+      </div>
+    </div>`;
+  const form = $('#lf');
+  const err = m => { $('#lerr').textContent = m; };
+  const busy = async (fn) => {
+    const btns = $$('button, a', app); btns.forEach(b => b.style.pointerEvents = 'none');
+    try { await fn(); } catch (e) { err(authMsg(e)); } finally { btns.forEach(b => b.style.pointerEvents = ''); }
+  };
+  form.onsubmit = e => { e.preventDefault(); err(''); busy(() => cloud.signIn(form.email.value.trim(), form.pass.value)); };
+  $('#signup').onclick = e => {
+    e.preventDefault(); err('');
+    if (!form.reportValidity()) return;
+    busy(() => cloud.signUp(form.email.value.trim(), form.pass.value));
+  };
+  $('#reset').onclick = e => {
+    e.preventDefault(); err('');
+    const email = form.email.value.trim();
+    if (!email) return err('Escribe tu correo arriba y vuelve a tocar "Olvidé mi contraseña".');
+    busy(async () => { await cloud.resetPassword(email); toast('Te enviamos un correo para cambiar tu contraseña', 4000); });
+  };
+}
+
+async function offerMigration(user) {
+  const localClients = await localBackend.all('clients').catch(() => []);
+  const done = await localBackend.get('settings', 'migratedTo').catch(() => null);
+  if (!localClients.length || (done && done.value === user.uid)) return;
+  openModal(`
+    <h2>Datos en este dispositivo</h2>
+    <p>Encontramos <b>${localClients.length} cliente${localClients.length > 1 ? 's' : ''}</b> guardados solo en este dispositivo (de antes de usar la nube). ¿Quieres subirlos a tu cuenta para verlos en todos tus dispositivos?</p>
+    <div class="actions"><button class="btn" id="no">Ahora no</button><button class="btn primary" id="yes">Subir a la nube</button></div>`, m => {
+    $('#no', m).onclick = () => closeModal();
+    $('#yes', m).onclick = async () => {
+      const data = await db.exportAll(localBackend);
+      data.settings = data.settings.filter(x => x.key !== 'migratedTo' && x.key !== 'lastBackup');
+      await db.importAll(data);
+      await localBackend.put('settings', { key: 'migratedTo', value: user.uid });
+      settings = { ...DEFAULT_SETTINGS, ...(await db.getSetting('settings', {})) };
+      await loadFoods(); applyTheme();
+      closeModal(); toast('Datos subidos a la nube'); router();
+    };
+  });
+}
+
+let appReady = false;
+async function startApp() {
   settings = { ...DEFAULT_SETTINGS, ...(await db.getSetting('settings', {})) };
   await loadFoods();
   applyTheme();
-  window.addEventListener('hashchange', router);
+  document.body.classList.remove('logged-out');
+  appReady = true;
   await router();
+}
+
+// Cambios que llegan desde otro dispositivo: se vuelve a dibujar la pantalla,
+// pero sin interrumpir si el coach está escribiendo o tiene una ventana abierta.
+const rerenderRemote = debounce(async () => {
+  const a = document.activeElement;
+  if (!appReady) return;
+  if (modalRoot.innerHTML || (a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName))) { rerenderRemote(); return; }
+  settings = { ...DEFAULT_SETTINGS, ...(await db.getSetting('settings', {})) };
+  await loadFoods();
+  applyTheme();
+  const y = window.scrollY;
+  await router();
+  window.scrollTo(0, y);
+}, 1200);
+
+// ================= inicio =================
+(async function init() {
+  window.addEventListener('hashchange', () => { if (appReady) router(); });
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
+  if (!cloud.enabled) { await startApp(); return; }
+  app.innerHTML = '<div class="empty">Cargando…</div>';
+  cloud.onRemoteChange(() => rerenderRemote());
+  let lastErr = 0;
+  cloud.onWriteError(e => {
+    if (Date.now() - lastErr < 5000) return;
+    lastErr = Date.now();
+    toast('No se pudo guardar en la nube: ' + (e.code || e.message), 5000);
+  });
+  await cloud.init({
+    onUser: async user => {
+      if (user) {
+        app.innerHTML = '<div class="empty">Cargando tus datos…</div>';
+        await useCloud(user.uid);
+        await startApp();
+        await offerMigration(user);
+      } else {
+        appReady = false;
+        closeModal();
+        viewLogin();
+      }
+    },
+  });
 })();

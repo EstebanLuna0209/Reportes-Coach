@@ -146,3 +146,9 @@ table.mini { width: 100%; border-collapse: collapse; margin-top: 4px; }
 table.mini td { padding: 3px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
 table.mini td:last-child { text-align: right; white-space: nowrap; }
 .unk, .unk a { color: #b45309; }
+
+.seg { display: inline-flex; margin-top: 3px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: #fff; font: inherit; font-size: .75rem; padding: 3px 9px; cursor: pointer; color: var(--muted); }
+.seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+.login { max-width: 400px; margin: 40px auto; }
+body.logged-out .topbar nav { display: none; }
