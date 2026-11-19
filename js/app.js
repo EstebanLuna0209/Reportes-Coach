@@ -1,16 +1,19 @@
 import { db, uid } from './db.js';
 import {
-  METRICS, DERIVED, GOALS, withDerived, num, fmt, fmtDelta, deltaQuality, clientAge,
+  METRICS, DERIVED, EXTRA, TAPE, GOALS, withDerived, num, fmt, fmtDelta, deltaQuality, clientAge,
   parseScaleText, parseBlocks, parseExercise, todayISO, fmtDate, rangeFor, classify,
 } from './metrics.js';
 import { buildReportPDF } from './pdf.js';
+import { buildFoodDB, BUILTIN_FOODS, analyzeMeal, analyzeDiet, fmtMacros } from './nutrition.js';
 
 const app = document.getElementById('app');
 const modalRoot = document.getElementById('modal-root');
 
 const DEFAULT_SETTINGS = {
-  business: '', coachName: '', phone: '', social: '', color: '#1f3a5f', logo: '',
+  business: '', coachName: '', phone: '', social: '', color: '#1f3a5f', logo: '', scale: 'omron',
 };
+let foods = BUILTIN_FOODS;
+async function loadFoods() { foods = buildFoodDB(await db.all('foods')); }
 const COLORS = ['#1f3a5f', '#0f766e', '#7c2d12', '#b91c1c', '#6d28d9', '#111827', '#c2410c', '#15803d'];
 
 let settings = { ...DEFAULT_SETTINGS };
@@ -271,14 +274,18 @@ function tabMeasurements(el, client, ms) {
       <h2 style="margin:0">${last ? `Última medición · ${fmtDate(last.date)}` : 'Mediciones'}</h2>
       <button class="btn primary" id="add-m">+ Nueva medición</button>
     </div>
-    ${last ? `<div class="kpis" style="margin-bottom:14px">${[...METRICS, ...DERIVED].map(kpi).join('')}</div>` : `<div class="card empty">Registra la primera medición de la báscula.</div>`}
+    ${last ? `<div class="kpis" style="margin-bottom:14px">${[...METRICS, ...EXTRA, ...DERIVED.filter(d => !(d.key === 'fatKg' && num(last.fatMassKg)))].map(kpi).join('')}</div>` : `<div class="card empty">Registra la primera medición de la báscula.</div>`}
     ${ms.length ? `<div class="card"><h3>Historial</h3><div class="table-wrap"><table class="data">
       <thead><tr><th>Fecha</th>${METRICS.map(d => `<th>${esc(d.short || d.label)}</th>`).join('')}<th></th></tr></thead>
       <tbody>${[...ms].reverse().map(m => `<tr>
         <td><b>${fmtDate(m.date)}</b></td>
         ${METRICS.map(d => `<td>${fmt(m[d.key], d.dec)}</td>`).join('')}
         <td><button class="btn sm ghost" data-edit="${m.id}">Editar</button></td>
-      </tr>`).join('')}</tbody></table></div></div>` : ''}`;
+      </tr>`).join('')}</tbody></table></div></div>` : ''}
+    ${ms.some(m => TAPE.some(d => num(m[d.key]))) ? `<div class="card"><h3>Medidas con cinta (cm)</h3><div class="table-wrap"><table class="data">
+      <thead><tr><th>Fecha</th>${TAPE.map(d => `<th>${esc(d.label)}</th>`).join('')}</tr></thead>
+      <tbody>${[...ms].reverse().filter(m => TAPE.some(d => num(m[d.key]))).map(m => `<tr>
+        <td><b>${fmtDate(m.date)}</b></td>${TAPE.map(d => `<td>${fmt(m[d.key], 1)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>` : ''}`;
 
   $('#add-m').onclick = () => measurementForm(client);
   $$('[data-edit]', el).forEach(b => b.onclick = () => measurementForm(client, ms.find(m => m.id === b.dataset.edit)));
@@ -299,6 +306,20 @@ function measurementForm(client, m) {
         ${METRICS.map(d => `<div><label>${esc(d.label)}${d.unit ? ` (${esc(d.unit)})` : ''}${d.required ? ' *' : ''}</label>
           <input name="${d.key}" inputmode="decimal" ${d.required ? 'required' : ''} value="${num(v[d.key]) ? v[d.key] : ''}"></div>`).join('')}
       </div>
+      <details ${settings.scale === 'inbody' || EXTRA.some(d => num(v[d.key])) ? 'open' : ''}>
+        <summary class="small" style="cursor:pointer;font-weight:600">Datos extra de báscula InBody (opcional)</summary>
+        <div class="grid" style="margin-top:8px">
+          ${EXTRA.map(d => `<div><label>${esc(d.label)} (${esc(d.unit)})</label>
+            <input name="${d.key}" inputmode="decimal" value="${num(v[d.key]) ? v[d.key] : ''}"></div>`).join('')}
+        </div>
+      </details>
+      <details ${TAPE.some(d => num(v[d.key])) ? 'open' : ''}>
+        <summary class="small" style="cursor:pointer;font-weight:600">Medidas con cinta (opcional, cm)</summary>
+        <div class="grid" style="margin-top:8px">
+          ${TAPE.map(d => `<div><label>${esc(d.label)}</label>
+            <input name="${d.key}" inputmode="decimal" value="${num(v[d.key]) ? v[d.key] : ''}"></div>`).join('')}
+        </div>
+      </details>
       <div><label>Notas de esta medición</label><textarea name="notes" style="min-height:60px">${esc(v.notes)}</textarea></div>
       <div class="actions">
         ${m ? '<button type="button" class="btn danger" id="del-m" style="margin-right:auto">Eliminar</button>' : ''}
@@ -311,6 +332,7 @@ function measurementForm(client, m) {
       const data = parseScaleText($('#paste', mod).value);
       const keys = Object.keys(data);
       keys.forEach(k => { if (form.elements[k]) form.elements[k].value = data[k]; });
+      keys.forEach(k => { const det = form.elements[k]?.closest('details'); if (det) det.open = true; });
       toast(keys.length ? `Se llenaron ${keys.length} campos` : 'No se reconocieron datos');
     };
     form.elements.weight.addEventListener('change', () => {
@@ -328,7 +350,7 @@ function measurementForm(client, m) {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(form));
       const data = { ...v, id: v.id || uid(), clientId: client.id, date: f.date, notes: f.notes.trim(), createdAt: v.createdAt || new Date().toISOString() };
-      for (const d of METRICS) data[d.key] = parseNum(f[d.key]);
+      for (const d of [...METRICS, ...EXTRA, ...TAPE]) data[d.key] = parseNum(f[d.key]);
       await db.put('measurements', data);
       closeModal(); toast('Medición guardada'); router();
     };
@@ -344,6 +366,28 @@ function tabDiet(el, client, plan) {
     const s = $('#saved', el); if (s) { s.textContent = '✓ Guardado'; setTimeout(() => s.textContent = '', 1500); }
   }, 500);
 
+  const updateMacros = () => {
+    const mode = diet.cookedMode || 'crudo';
+    let any = false;
+    diet.meals.forEach((m, i) => {
+      const box = $(`[data-macro="${i}"]`, el);
+      if (!box) return;
+      const a = analyzeMeal(m.items, foods, mode);
+      if (!a.items.length) { box.innerHTML = ''; return; }
+      any = any || a.total.kcal > 0;
+      box.innerHTML = `${a.total.kcal > 0 ? `<b>≈ ${esc(fmtMacros(a.total))}</b>` : ''}
+        <details class="small"><summary>Ver detalle</summary>
+          <table class="mini">${a.items.map(it => it.food
+            ? `<tr><td>${esc(it.text)}</td><td class="muted">${esc(it.food.name)} · ${Math.round(it.grams)} g</td><td>${Math.round(it.kcal)} kcal</td></tr>`
+            : `<tr class="unk"><td>${esc(it.text)}</td><td colspan="2">No reconocido · <a href="#" data-addfood="${esc(it.text)}">agregar alimento</a></td></tr>`).join('')}</table>
+        </details>
+        ${a.unknown.length ? `<div class="unk small">⚠ No reconocido: ${a.unknown.map(u => `<a href="#" data-addfood="${esc(u)}">${esc(u)}</a>`).join(', ')}</div>` : ''}`;
+    });
+    const tot = analyzeDiet(diet, foods, mode).total;
+    $('#day-total', el).innerHTML = any ? `<span class="muted small">Total del día (aprox.)</span><div><b>${esc(fmtMacros(tot))}</b></div>` : '';
+    $$('[data-addfood]', el).forEach(a => a.onclick = e => { e.preventDefault(); foodForm(null, a.dataset.addfood, () => updateMacros()); });
+  };
+
   const render = () => {
     el.innerHTML = `
       <div class="card">
@@ -358,8 +402,12 @@ function tabDiet(el, client, plan) {
         </div>
         <div class="grid two" style="margin-bottom:12px">
           <div><label>Título (opcional)</label><input data-f="title" value="${esc(diet.title)}" placeholder="Ej. Plan definición semana 1"></div>
-          <div><label>Calorías / macros (opcional)</label><input data-f="kcal" value="${esc(diet.kcal)}" placeholder="Ej. 2,100 kcal · P 180g · C 200g · G 60g"></div>
+          <div><label>Nota de calorías / macros (opcional)</label><input data-f="kcal" value="${esc(diet.kcal)}" placeholder="Ej. Objetivo: 2,100 kcal"></div>
+          <div><label>Carnes, arroz y pasta pesados en</label><select id="cooked">
+            <option value="crudo" ${diet.cookedMode !== 'cocido' ? 'selected' : ''}>Crudo</option>
+            <option value="cocido" ${diet.cookedMode === 'cocido' ? 'selected' : ''}>Cocido</option></select></div>
         </div>
+        <div class="macro-total" id="day-total"></div>
         <div id="meals">
           ${diet.meals.map((m, i) => `<div class="block">
             <div class="head">
@@ -368,6 +416,7 @@ function tabDiet(el, client, plan) {
               <button class="btn sm ghost danger" data-rm="${i}" title="Quitar">✕</button>
             </div>
             <textarea data-m="${i}" data-k="items" placeholder="Alimentos y cantidades (uno por línea o separados por coma)">${esc(m.items)}</textarea>
+            <div class="macro-line" data-macro="${i}"></div>
           </div>`).join('') || '<div class="empty">Sin comidas. Agrega una o pega el texto de la dieta.</div>'}
         </div>
         <button class="btn" id="add" style="margin-top:10px">+ Agregar comida</button>
@@ -376,7 +425,9 @@ function tabDiet(el, client, plan) {
       </div>`;
 
     $$('[data-f]', el).forEach(i => i.oninput = () => { diet[i.dataset.f] = i.value; save(); });
-    $$('[data-m]', el).forEach(i => i.oninput = () => { diet.meals[i.dataset.m][i.dataset.k] = i.value; save(); });
+    $$('[data-m]', el).forEach(i => i.oninput = () => { diet.meals[i.dataset.m][i.dataset.k] = i.value; save(); if (i.dataset.k === 'items') updateMacros(); });
+    $('#cooked', el).onchange = e => { diet.cookedMode = e.target.value; save(); updateMacros(); };
+    updateMacros();
     $$('[data-rm]', el).forEach(b => b.onclick = () => { diet.meals.splice(+b.dataset.rm, 1); save(); render(); });
     $$('[data-up]', el).forEach(b => b.onclick = () => { const i = +b.dataset.up; [diet.meals[i - 1], diet.meals[i]] = [diet.meals[i], diet.meals[i - 1]]; save(); render(); });
     $('#add', el).onclick = () => { diet.meals.push({ title: `Comida ${diet.meals.length + 1}`, items: '' }); save(); render(); $$('[data-k=items]', el).pop()?.focus(); };
@@ -530,6 +581,7 @@ function tabReport(el, client, ms, plan) {
         <label class="check"><input type="checkbox" id="o-history" checked> Historial de mediciones</label>
         <label class="check"><input type="checkbox" id="o-diet" ${hasDiet ? 'checked' : 'disabled'}> Incluir dieta ${hasDiet ? '' : '<span class="muted small">(vacía)</span>'}</label>
         <label class="check"><input type="checkbox" id="o-routine" ${hasRoutine ? 'checked' : 'disabled'}> Incluir rutina ${hasRoutine ? '' : '<span class="muted small">(vacía)</span>'}</label>
+        <label class="check"><input type="checkbox" id="o-macros" ${hasDiet ? 'checked' : 'disabled'}> Calorías y macros en la dieta</label>
       </div>
       <div><label>Comentarios para el cliente (aparecen en el reporte)</label>
         <textarea id="comments" placeholder="Ej. ¡Excelente semana! Bajaste grasa y mantuviste músculo. Sigamos con el cardio en ayunas.">${esc(saved.comments || '')}</textarea></div>
@@ -553,6 +605,8 @@ function tabReport(el, client, ms, plan) {
         includeHistory: $('#o-history', el).checked,
         includeDiet: $('#o-diet', el).checked,
         includeRoutine: $('#o-routine', el).checked,
+        includeMacros: $('#o-macros', el).checked,
+        foods,
         comments,
       },
     });
@@ -602,9 +656,37 @@ async function viewTemplates() {
       </div>`).join('') : '<p class="muted small">Sin plantillas. Ábrelas desde la dieta o rutina de un cliente con "Guardar como plantilla".</p>'}
     </div>`;
   };
+  const custom = await db.all('foods');
   app.innerHTML = `<h1>Plantillas</h1>
     <p class="muted small">Guarda dietas y rutinas que usas seguido y cárgalas a cualquier cliente en segundos.</p>
-    ${section('diet', 'Dietas')}${section('routine', 'Rutinas')}`;
+    ${section('diet', 'Dietas')}${section('routine', 'Rutinas')}
+    <div class="card">
+      <div class="row between"><h2 style="margin:0">Mis alimentos</h2><button class="btn sm primary" id="add-food">+ Alimento</button></div>
+      <p class="muted small">Agrega alimentos o marcas que la app no reconoce (por ejemplo tu proteína) para que el cálculo de calorías sea más exacto. Tus alimentos tienen prioridad sobre los de la app.</p>
+      ${custom.length ? custom.sort((a, b) => a.name.localeCompare(b.name)).map(f => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <div><b>${esc(f.name)}</b> <span class="muted small">· ${f.kcal} kcal · P ${f.p} · C ${f.c} · G ${f.f} por 100 g</span></div>
+        <div class="row"><button class="btn sm" data-editfood="${f.id}">Editar</button><button class="btn sm danger" data-delfood="${f.id}">Eliminar</button></div>
+      </div>`).join('') : ''}
+      <details style="margin-top:10px"><summary class="small" style="cursor:pointer;font-weight:600">Ver alimentos que ya reconoce la app (${BUILTIN_FOODS.length})</summary>
+        <input type="search" id="food-q" placeholder="Buscar…" style="margin:8px 0">
+        <div class="table-wrap"><table class="data" id="food-tbl"></table></div>
+      </details>
+    </div>`;
+  const renderFoods = q => {
+    const n = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const list = BUILTIN_FOODS.filter(f => !q || n(f.name + ' ' + f.aliases.join(' ')).includes(n(q)));
+    $('#food-tbl').innerHTML = `<thead><tr><th>Alimento (100 g)</th><th>kcal</th><th>P</th><th>C</th><th>G</th><th>1 pieza/toma</th></tr></thead><tbody>${list.map(f => `<tr>
+      <td>${esc(f.name)}${f.cooked ? ' <span class="muted small">(crudo)</span>' : ''}</td><td>${f.kcal}</td><td>${f.p}</td><td>${f.c}</td><td>${f.f}</td>
+      <td class="muted small">${Object.entries(f.units || {}).map(([u, g]) => `${u} ${g} g`).join(', ')}</td></tr>`).join('')}</tbody>`;
+  };
+  renderFoods('');
+  $('#food-q').oninput = e => renderFoods(e.target.value);
+  $('#add-food').onclick = () => foodForm(null, '', viewTemplates);
+  $$('[data-editfood]').forEach(b => b.onclick = () => foodForm(custom.find(f => f.id === b.dataset.editfood), '', viewTemplates));
+  $$('[data-delfood]').forEach(b => b.onclick = async () => {
+    const f = custom.find(x => x.id === b.dataset.delfood);
+    if (await confirmDialog(`Eliminar el alimento "${f.name}".`)) { await db.del('foods', f.id); await loadFoods(); viewTemplates(); }
+  });
   $$('[data-del]').forEach(b => b.onclick = async () => {
     const t = list.find(x => x.id === b.dataset.del);
     if (await confirmDialog(`Eliminar la plantilla "${t.name}".`)) { await db.del('templates', t.id); viewTemplates(); }
@@ -615,6 +697,44 @@ async function viewTemplates() {
       <div class="actions"><button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button></div>`, m => {
       $('#ok', m).onclick = async () => { t.name = $('#tn', m).value.trim() || t.name; await db.put('templates', t); closeModal(); viewTemplates(); };
     });
+  });
+}
+
+function foodForm(food, suggested = '', onSaved) {
+  const f = food || { name: suggested.replace(/^[\d.,/½\s]+(g|gr|grs|kg|ml|tomas?|scoops?|piezas?|tazas?|cdas?|rebanadas?)?\s*(de\s+)?/i, ''), aliases: [], units: {} };
+  openModal(`
+    <h2>${food ? 'Editar alimento' : 'Nuevo alimento'}</h2>
+    <p class="small muted">Valores por cada 100 g (vienen en la etiqueta nutrimental o en internet).</p>
+    <form id="ff" class="stack">
+      <div><label>Nombre *</label><input name="name" required value="${esc(f.name)}" placeholder="Ej. Proteína Birdman vainilla"></div>
+      <div><label>Otras formas de escribirlo (separadas por coma)</label><input name="aliases" value="${esc((f.aliases || []).join(', '))}" placeholder="Ej. proteina birdman, birdman"></div>
+      <div class="grid">
+        <div><label>Calorías (kcal)</label><input name="kcal" inputmode="decimal" required value="${esc(f.kcal)}"></div>
+        <div><label>Proteína (g)</label><input name="p" inputmode="decimal" required value="${esc(f.p)}"></div>
+        <div><label>Carbohidratos (g)</label><input name="c" inputmode="decimal" required value="${esc(f.c)}"></div>
+        <div><label>Grasa (g)</label><input name="f" inputmode="decimal" required value="${esc(f.f)}"></div>
+      </div>
+      <div class="grid">
+        <div><label>1 pieza pesa (g)</label><input name="pieza" inputmode="decimal" value="${esc(f.units?.pieza)}" placeholder="Ej. 50"></div>
+        <div><label>1 toma / scoop (g)</label><input name="toma" inputmode="decimal" value="${esc(f.units?.toma)}" placeholder="Ej. 30"></div>
+        <div><label>1 taza (g)</label><input name="taza" inputmode="decimal" value="${esc(f.units?.taza)}"></div>
+      </div>
+      <div class="actions"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary">Guardar</button></div>
+    </form>`, m => {
+    $('#ff', m).onsubmit = async e => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const units = {};
+      for (const u of ['pieza', 'toma', 'taza']) { const v = parseNum(d[u]); if (v) units[u] = v; }
+      await db.put('foods', {
+        id: f.id || uid(), name: d.name.trim(),
+        aliases: d.aliases.split(',').map(x => x.trim()).filter(Boolean),
+        kcal: parseNum(d.kcal) || 0, p: parseNum(d.p) || 0, c: parseNum(d.c) || 0, f: parseNum(d.f) || 0, units,
+      });
+      await loadFoods();
+      closeModal(); toast('Alimento guardado');
+      onSaved && onSaved();
+    };
   });
 }
 
@@ -631,6 +751,9 @@ async function viewSettings() {
         <div><label>Teléfono / WhatsApp</label><input data-s="phone" value="${esc(settings.phone)}"></div>
         <div><label>Instagram / web</label><input data-s="social" value="${esc(settings.social)}" placeholder="@micoaching"></div>
       </div>
+      <div><label>Báscula que usas</label><select id="scale">
+        <option value="omron" ${settings.scale !== 'inbody' ? 'selected' : ''}>Omron (HBF-514C u otra de bioimpedancia)</option>
+        <option value="inbody" ${settings.scale === 'inbody' ? 'selected' : ''}>InBody (muestra campos extra al capturar)</option></select></div>
       <div><label>Logo</label>
         <div class="row">
           ${settings.logo ? `<img class="logo-preview" src="${settings.logo}" alt="Logo">` : ''}
@@ -654,6 +777,7 @@ async function viewSettings() {
 
   const saveSettings = debounce(async () => { await db.setSetting('settings', settings); applyTheme(); }, 300);
   $$('[data-s]').forEach(i => i.oninput = () => { settings[i.dataset.s] = i.value; saveSettings(); });
+  $('#scale').onchange = e => { settings.scale = e.target.value; saveSettings(); };
   $$('[data-color]').forEach(b => b.onclick = async () => { settings.color = b.dataset.color; await saveSettings.flush(); viewSettings(); });
   $('#custom-color').onchange = async e => { settings.color = e.target.value; await saveSettings.flush(); viewSettings(); };
   $('#logo').onchange = async e => {
@@ -683,6 +807,7 @@ async function viewSettings() {
       const n = (data.clients || []).length;
       if (await confirmDialog(`El respaldo tiene ${n} clientes. Se combinará con los datos actuales (los registros iguales se reemplazan).`, 'Restaurar')) {
         await db.importAll(data);
+        await loadFoods();
         settings = { ...DEFAULT_SETTINGS, ...(await db.getSetting('settings', {})) };
         applyTheme(); toast('Respaldo restaurado'); viewSettings();
       }
@@ -710,6 +835,7 @@ function resizeImage(file, max) {
 // ================= inicio =================
 (async function init() {
   settings = { ...DEFAULT_SETTINGS, ...(await db.getSetting('settings', {})) };
+  await loadFoods();
   applyTheme();
   window.addEventListener('hashchange', router);
   await router();

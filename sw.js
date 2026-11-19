@@ -1,7 +1,7 @@
 // Service worker: permite usar la app sin internet una vez abierta.
-const CACHE = 'reportes-coach-v1';
+const CACHE = 'reportes-coach-v2';
 const ASSETS = [
-  './', 'index.html', 'css/styles.css', 'js/app.js', 'js/db.js', 'js/metrics.js', 'js/pdf.js',
+  './', 'index.html', 'css/styles.css', 'js/app.js', 'js/db.js', 'js/metrics.js', 'js/pdf.js', 'js/nutrition.js',
   'vendor/jspdf.umd.min.js', 'vendor/jspdf.plugin.autotable.min.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];

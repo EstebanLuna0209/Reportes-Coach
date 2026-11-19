@@ -136,3 +136,13 @@ table.data td:first-child, table.data th:first-child { text-align: left; }
 .color-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .swatch { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px var(--line); cursor: pointer; padding: 0; min-height: 0; }
 .swatch.active { box-shadow: 0 0 0 2px var(--text); }
+
+.macro-line { margin-top: 6px; font-size: .85rem; color: var(--accent); }
+.macro-line details { color: var(--muted); margin-top: 2px; }
+.macro-line summary { cursor: pointer; }
+.macro-total { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; color: var(--accent); }
+.macro-total:empty { display: none; }
+table.mini { width: 100%; border-collapse: collapse; margin-top: 4px; }
+table.mini td { padding: 3px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.mini td:last-child { text-align: right; white-space: nowrap; }
+.unk, .unk a { color: #b45309; }

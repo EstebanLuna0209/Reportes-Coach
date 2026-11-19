@@ -1,7 +1,7 @@
 // Almacenamiento local con IndexedDB (los datos viven en el dispositivo del coach).
 const DB_NAME = 'reportes-coach';
-const DB_VERSION = 1;
-const STORES = ['clients', 'measurements', 'plans', 'templates', 'settings'];
+const DB_VERSION = 2;
+const STORES = ['clients', 'measurements', 'plans', 'templates', 'settings', 'foods'];
 
 let dbPromise = null;
 
@@ -19,6 +19,7 @@ function openDB() {
       if (!db.objectStoreNames.contains('plans')) db.createObjectStore('plans', { keyPath: 'clientId' });
       if (!db.objectStoreNames.contains('templates')) db.createObjectStore('templates', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('settings')) db.createObjectStore('settings', { keyPath: 'key' });
+      if (!db.objectStoreNames.contains('foods')) db.createObjectStore('foods', { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
